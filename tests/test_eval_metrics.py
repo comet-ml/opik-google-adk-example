@@ -183,3 +183,13 @@ def test_check_credentials_passes_for_self_hosted(monkeypatch, tmp_path):
     monkeypatch.delenv("OPIK_API_KEY", raising=False)
     monkeypatch.setenv("OPIK_URL_OVERRIDE", "http://localhost:5173/api")
     assert check_credentials() == []
+
+
+def test_check_credentials_accepts_workspace_from_opik_config(monkeypatch, tmp_path):
+    config = tmp_path / "opik.config"
+    config.write_text("[opik]\nworkspace = demo\n")
+    monkeypatch.setenv("OPIK_CONFIG_PATH", str(config))
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    monkeypatch.setenv("OPIK_API_KEY", "x")
+    monkeypatch.delenv("OPIK_WORKSPACE", raising=False)
+    assert check_credentials() == []

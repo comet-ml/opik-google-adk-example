@@ -7,7 +7,14 @@ as structured input and output on its span in Opik.
 
 import re
 
+from google.adk.tools import ToolContext
+
 from .data import HELP_ARTICLES, ORDERS, REFUND_WINDOW_DAYS
+
+# Refunds issued during this conversation, kept in ADK session state so a
+# second refund of the same order is refused. Session state is per
+# conversation, so parallel evaluation cases don't see each other's refunds.
+REFUNDED_KEY = "refunded_orders"
 
 
 def normalize_order_id(order_id: str) -> str:
@@ -44,13 +51,16 @@ def search_help_center(query: str) -> dict:
     return {"articles": [article for _, article in scored[:2]]}
 
 
-def check_refund_eligibility(order_id: str) -> dict:
+def check_refund_eligibility(order_id: str, tool_context: ToolContext | None = None) -> dict:
     """Check whether an order can be refunded under the 30-day policy."""
+    # ADK fills in tool_context and leaves it out of the schema the model sees.
     order = lookup_order(order_id)
     if not order["found"]:
         return {"eligible": False, "reason": "order not found"}
     if order.get("refund_id"):
         return {"eligible": False, "reason": f"already refunded ({order['refund_id']})"}
+    if tool_context and order["order_id"] in tool_context.state.get(REFUNDED_KEY, []):
+        return {"eligible": False, "reason": "already refunded in this conversation"}
     if order["status"] != "delivered":
         return {"eligible": False, "reason": "order has not been delivered yet"}
     days = order["days_since_delivery"]
@@ -62,16 +72,20 @@ def check_refund_eligibility(order_id: str) -> dict:
     return {"eligible": True, "amount_usd": order["total_usd"]}
 
 
-def issue_refund(order_id: str, reason: str) -> dict:
+def issue_refund(order_id: str, reason: str, tool_context: ToolContext | None = None) -> dict:
     """Refund an order to the original payment method.
 
     Only call this after check_refund_eligibility says the order is eligible.
     """
-    eligibility = check_refund_eligibility(order_id)
+    eligibility = check_refund_eligibility(order_id, tool_context)
     if not eligibility["eligible"]:
-        # The policy is enforced here, not only in the prompt.
+        # The order-data rules are enforced here, not only in the prompt.
+        # Rules that depend on the conversation (a damaged item is replaced,
+        # not refunded) live in the prompt, so the evaluation checks them.
         return {"refunded": False, "reason": eligibility["reason"]}
     order_id = normalize_order_id(order_id)
+    if tool_context:
+        tool_context.state[REFUNDED_KEY] = [*tool_context.state.get(REFUNDED_KEY, []), order_id]
     return {
         "refunded": True,
         "refund_id": f"R-{order_id}",

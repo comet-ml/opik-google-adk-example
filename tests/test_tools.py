@@ -54,3 +54,32 @@ def test_tools_accept_non_string_arguments():
     assert tools.lookup_order(None)["found"] is False
     assert tools.check_refund_eligibility(None)["eligible"] is False
     assert tools.search_help_center(["refund"])["articles"] == tools.search_help_center("refund")["articles"]
+
+
+class FakeToolContext:
+    """Stands in for ADK's ToolContext: tools only use its session state."""
+
+    def __init__(self):
+        self.state = {}
+
+
+def test_refunding_the_same_order_twice_in_a_conversation_is_refused():
+    context = FakeToolContext()
+    assert tools.issue_refund("A1001", "too small", context)["refunded"] is True
+    assert tools.check_refund_eligibility("a1001", context)["eligible"] is False
+    second = tools.issue_refund("#a1001", "again", context)
+    assert second["refunded"] is False
+    assert "this conversation" in second["reason"]
+
+
+def test_refund_state_is_per_conversation():
+    tools.issue_refund("A1001", "too small", FakeToolContext())
+    assert tools.issue_refund("A1001", "too small", FakeToolContext())["refunded"] is True
+
+
+def test_tool_context_is_hidden_from_the_model():
+    from google.adk.tools import FunctionTool
+
+    declaration = FunctionTool(tools.issue_refund)._get_declaration()
+    schema = declaration.parameters_json_schema or declaration.parameters.model_dump()
+    assert set(schema["properties"]) == {"order_id", "reason"}

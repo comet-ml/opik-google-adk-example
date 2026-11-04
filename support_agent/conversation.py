@@ -122,13 +122,12 @@ def check_credentials() -> list[str]:
     missing = []
     if not (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")):
         missing.append("GOOGLE_API_KEY (free key at https://aistudio.google.com/apikey)")
-    if os.getenv("OPIK_API_KEY") and not os.getenv("OPIK_WORKSPACE"):
+    # `opik configure` writes ~/.opik.config (or OPIK_CONFIG_PATH), which can
+    # supply the workspace even when the API key comes from the environment.
+    config_file = Path(os.getenv("OPIK_CONFIG_PATH", "~/.opik.config")).expanduser().exists()
+    if os.getenv("OPIK_API_KEY") and not os.getenv("OPIK_WORKSPACE") and not config_file:
         missing.append("OPIK_WORKSPACE (your Opik workspace name, shown in the Opik URL)")
-    has_opik = (
-        os.getenv("OPIK_API_KEY")
-        or os.getenv("OPIK_URL_OVERRIDE")
-        or Path("~/.opik.config").expanduser().exists()
-    )
+    has_opik = os.getenv("OPIK_API_KEY") or os.getenv("OPIK_URL_OVERRIDE") or config_file
     if not has_opik:
         missing.append(
             "Opik credentials: run `uv run opik configure`, or set OPIK_API_KEY and "

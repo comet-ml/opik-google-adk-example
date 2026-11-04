@@ -19,7 +19,7 @@ Trailhead Outfitters is a made-up outdoor gear store. Its support team is two AD
 | `support_agent` (root) | `lookup_order`, `search_help_center`, `escalate_to_human` | Order status, policy questions and damaged items. Hands refunds to `refunds_agent`. |
 | `refunds_agent` (sub-agent) | `lookup_order`, `check_refund_eligibility`, `issue_refund`, `escalate_to_human` | Checks the 30-day policy, issues the refund or explains why not. |
 
-The store data is canned (`support_agent/data.py`), so there's no database to set up. The data-driven part of the refund policy (30 days from delivery, delivered orders only, not already refunded) is enforced in `issue_refund` itself, not only in the prompt.
+The store data is canned (`support_agent/data.py`), so there's no database to set up. The data-driven part of the refund policy (30 days from delivery, delivered orders only, not already refunded) is enforced in `issue_refund` itself, not only in the prompt. Refunds issued during a conversation are kept in ADK session state (`tool_context.state`), so a second refund of the same order is refused too.
 
 ## Run it
 
@@ -28,7 +28,7 @@ You need [uv](https://docs.astral.sh/uv/) and Python 3.11 or newer.
 ```bash
 git clone https://github.com/comet-ml/opik-google-adk-example.git
 cd opik-google-adk-example
-cp .env.example .env
+cp .env.example .env   # Windows: copy .env.example .env
 ```
 
 Fill in `.env`:
@@ -48,6 +48,24 @@ uv run compare.py    # the same 23 cases on two models, side by side
 ```
 
 Open the `google-adk-support-agent` project in Opik. **Traces** has one trace per turn, **Threads** has the conversation, and the dataset `trailhead-support-cases` has the experiments.
+
+## Quickstart: one agent, one file
+
+Just want to see an ADK agent in Opik? `quickstart.py` is the whole thing in about 40 lines: one agent, one tool, the tracer, a run and a flush.
+
+```bash
+uv run quickstart.py
+```
+
+The Opik part is two lines:
+
+```python
+from opik.integrations.adk import OpikTracer, track_adk_agent_recursive
+
+track_adk_agent_recursive(agent, OpikTracer(project_name="google-adk-quickstart"))
+```
+
+Open the `google-adk-quickstart` project in Opik and you'll see one trace with the agent, its Gemini calls and the tool call.
 
 ## How the tracing works
 
@@ -81,6 +99,10 @@ Two more things that matter:
 - **Read the whole event stream.** Don't `break` out of `runner.run_async` on the final response. The trace won't finish.
 - **Flush before exit.** Call `opik.flush_tracker()` at the end of a script so nothing is lost.
 
+### ADK's own dev tools
+
+`uv run adk web` (the browser dev UI) and `uv run adk run support_agent` (the terminal chat) work from the repo root and send traces to Opik, because `root_agent` is already instrumented. They call ADK's runner directly, not `run_turn`, so a turn with a handoff shows up as two traces there. Use `main.py` or your own wrapper when you want one trace per turn.
+
 ## How the evaluation works
 
 `evaluate.py` loads the 23 cases in `eval_cases.py` into an Opik dataset. Each case is a customer message, the tools the agent must call and the agent that should handle it. About half are the happy path. The rest are the requests that trip up real support agents:
@@ -101,7 +123,7 @@ Every case runs in a fresh ADK session and is scored with:
 | `grounded_order_ids` | Custom, in code, reads tool arguments | Every order ID the agent used is one the customer typed |
 | `answer_relevance_metric` | Opik's `AnswerRelevance` LLM judge, run on Gemini (`JUDGE_MODEL`) | The reply answers what the customer asked |
 
-The custom metrics are in `eval_metrics.py`. `policy_safe_refunds` is the one to copy. It replays each `issue_refund` call, in order, against `check_refund_eligibility`, the same policy check the store uses, and fails the case if the agent tried a refund the policy forbids or refunded the same order twice. Some rules live in the conversation, not the order data: a damaged item is replaced, not refunded. Those test cases set `refund_allowed: False`, and any refund fails them. In this repo `issue_refund` also refuses in code, so no money moves. The metric fails anyway, because the model tried: without that guard, it would have paid. An LLM judge can't catch this reliably. The reply to a wrongly refunded customer reads as polite and relevant.
+The custom metrics are in `eval_metrics.py`. `policy_safe_refunds` is the one to copy. It replays each `issue_refund` call, in order, against `check_refund_eligibility`, the same policy check the store uses, and fails the case if the agent tried a refund the policy forbids or refunded the same order twice. Some rules live in the conversation, not the order data: a damaged item is replaced, not refunded. Those test cases set `refund_allowed: False`, and any refund fails them. `issue_refund` can't see the conversation, so it would pay out on a damaged item; only the prompt and this metric stand in the way. For the order-data rules, `issue_refund` also refuses in code, and the metric still fails the case, because the model tried. An LLM judge can't catch this reliably. The reply to a wrongly refunded customer reads as polite and relevant.
 
 Each case's full trace is linked from the experiment, so a failing score opens straight to the agent run that caused it. The judge model stays the same unless you set `JUDGE_MODEL`, so runs on different agent models are scored the same way.
 
@@ -144,6 +166,7 @@ What the misses showed:
 
 - `google-adk` 2.13 changed the span ADK opens at the start of a run. Opik 2.2.135 added support for it ([comet-ml/opik#9283](https://github.com/comet-ml/opik/pull/9283)), so this repo pins `opik>=2.2.135`.
 - ADK logs a one-time hint that the app has agent transfers but no `context_cache_config`. That's a cost tip for production; it's safe to ignore here.
+- `.python-version` pins 3.12, so uv uses Python 3.12 by default. `uv sync --locked` installs the exact versions tested here.
 - Current ADK needs Python 3.11 or newer.
 
 Tested with `google-adk` 2.13.0, `opik` 2.2.138, `gemini-3.8-flash` and `gemini-3.5-flash-lite`.
@@ -156,6 +179,7 @@ support_agent/
   tools.py          the five tools
   data.py           canned orders and help articles
   conversation.py   runs a turn through ADK's Runner, one trace per turn
+quickstart.py       the smallest complete example: one agent, traced
 main.py             three-turn demo conversation
 eval_cases.py       the 23 test cases
 eval_metrics.py     the four custom metrics and the judge
